@@ -30,6 +30,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure private Cargo git dependencies
+        env:
+          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CLI_RELEASE_REPO_TOKEN }}
+        run: |
+          if [ -z "${CLI_RELEASE_REPO_TOKEN}" ]; then
+            echo "::error::CLI_RELEASE_REPO_TOKEN is required to fetch futex-ai/cli-release"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${CLI_RELEASE_REPO_TOKEN}@github.com/futex-ai/cli-release".insteadOf "https://github.com/futex-ai/cli-release"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         run: |
           rustup toolchain install "${RUST_TOOLCHAIN}" --component rustfmt --component clippy

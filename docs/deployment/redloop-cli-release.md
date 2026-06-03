@@ -37,7 +37,9 @@ The `Redloop CLI Release` workflow:
 
 Required GitHub secrets:
 
-- `CLI_RELEASE_REPO_TOKEN` - read access to `futex-ai/cli-release` when needed.
+- `CLI_RELEASE_REPO_TOKEN` - read access to `futex-ai/cli-release` for
+  Cargo's private `cli-updater` git dependency and shared release-server
+  checkout.
 - `GCP_WORKLOAD_IDENTITY_PROVIDER` - workload identity provider for GCP deploys.
 - `GCP_SERVICE_ACCOUNT` - deploy service account email.
 
