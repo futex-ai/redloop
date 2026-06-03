@@ -1,0 +1,329 @@
+name: Redloop CLI Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v<version> release tag to rebuild CLI assets"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redloop-cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ARTIFACT_REGISTRY_REPOSITORY: redloop-cli-release
+  CLI_RELEASE_IMAGE_NAME: cli-release-server
+  CLI_RELEASE_REPO: futex-ai/cli-release
+  CLI_RELEASE_VERSION_PACKAGE: redloop-cli
+  CLOUD_RUN_MAX_INSTANCES: "2"
+  CLOUD_RUN_MIN_INSTANCES: "0"
+  CLOUD_RUN_REGION: europe-west2
+  CLOUD_RUN_SERVICE: redloop-cli-release
+  GCP_PROJECT_ID: internal-498318
+  REDLOOP_RELEASE_SERVER_URL: https://redloop-cli-release-993259844560.europe-west2.run.app
+  RELEASE_PLZ_TOOLCHAIN: stable
+  RUST_TOOLCHAIN: 1.89.0
+
+jobs:
+  release-plz-release:
+    name: Release-plz Release
+    runs-on: ubuntu-latest-m
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      release_title: ${{ steps.manual.outputs.release_title || steps.resolve.outputs.release_title }}
+      releases_created: ${{ steps.manual.outputs.releases_created || steps.release-plz.outputs.releases_created }}
+      tag: ${{ steps.manual.outputs.tag || steps.resolve.outputs.tag }}
+      version: ${{ steps.manual.outputs.version || steps.resolve.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
+
+      - name: Install system dependencies
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq pkg-config
+
+      - name: Resolve manual release tag
+        id: manual
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          git fetch --force --tags
+          git checkout --detach "$TAG"
+          scripts/cli-release.sh resolve-workspace-tag "$TAG" Cargo.toml >> "$GITHUB_OUTPUT"
+          echo "releases_created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        if: steps.manual.outputs.releases_created != 'true'
+        run: |
+          rustup toolchain install "${RELEASE_PLZ_TOOLCHAIN}"
+          rustup default "${RELEASE_PLZ_TOOLCHAIN}"
+
+      - name: Validate package manifests
+        if: steps.manual.outputs.releases_created != 'true'
+        run: scripts/cli-release.sh verify-package-manifests Cargo.toml
+
+      - name: Run release-plz release
+        id: release-plz
+        if: steps.manual.outputs.releases_created != 'true'
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve released version
+        id: resolve
+        if: steps.release-plz.outputs.releases_created == 'true'
+        env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          release_count="$(echo "$RELEASES" | jq 'length')"
+          if [ "$release_count" -ne 1 ]; then
+            echo "::error::expected exactly one Redloop release, found ${release_count}"
+            exit 1
+          fi
+
+          tag="$(echo "$RELEASES" | jq -r '.[0].tag')"
+          scripts/cli-release.sh resolve-workspace-tag "$tag" Cargo.toml >> "$GITHUB_OUTPUT"
+
+  build-cli-assets:
+    name: Build redloop-cli ${{ matrix.target.triple }}
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - runner: ubuntu-latest-m
+            triple: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            triple: x86_64-apple-darwin
+          - runner: macos-14
+            triple: aarch64-apple-darwin
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-plz-release.outputs.tag }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq pkg-config
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install jq
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}"
+          rustup default "${RUST_TOOLCHAIN}"
+          rustup target add "${{ matrix.target.triple }}"
+
+      - name: Validate release tag and workspace version
+        env:
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: scripts/cli-release.sh resolve-workspace-tag "$TAG" Cargo.toml
+
+      - name: Build release binary
+        env:
+          TARGET: ${{ matrix.target.triple }}
+        run: cargo build --locked --release --package redloop-cli --bin redloop-cli --target "$TARGET"
+
+      - name: Smoke test binary
+        env:
+          TARGET: ${{ matrix.target.triple }}
+        run: "\"target/${TARGET}/release/redloop-cli\" --help"
+
+      - name: Package release asset
+        id: package
+        env:
+          TARGET: ${{ matrix.target.triple }}
+          VERSION: ${{ needs.release-plz-release.outputs.version }}
+        run: |
+          scripts/cli-release.sh package \
+            redloop-cli \
+            "$VERSION" \
+            "$TARGET" \
+            "target/${TARGET}/release/redloop-cli" \
+            dist >> "$GITHUB_OUTPUT"
+
+      - name: Upload release asset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset_name }}
+          path: |
+            ${{ steps.package.outputs.asset_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+
+  publish-cli-assets:
+    name: Publish CLI Assets
+    needs:
+      - release-plz-release
+      - build-cli-assets
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest-m
+    permissions:
+      contents: write
+    steps:
+      - name: Download release asset artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: |
+          gh release upload "$TAG" dist/* --clobber --repo "$REPO"
+          gh release edit "$TAG" --draft=false --repo "$REPO"
+
+  deploy-release-server:
+    name: Deploy Release Server
+    needs:
+      - release-plz-release
+      - publish-cli-assets
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest-m
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out shared cli-release repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CLI_RELEASE_REPO }}
+          path: cli-release
+          token: ${{ secrets.CLI_RELEASE_REPO_TOKEN || github.token }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure Artifact Registry repository
+        run: |
+          gcloud artifacts repositories describe "$ARTIFACT_REGISTRY_REPOSITORY" \
+            --project "$GCP_PROJECT_ID" \
+            --location "$CLOUD_RUN_REGION" \
+          || gcloud artifacts repositories create "$ARTIFACT_REGISTRY_REPOSITORY" \
+            --project "$GCP_PROJECT_ID" \
+            --location "$CLOUD_RUN_REGION" \
+            --repository-format docker \
+            --description "Redloop CLI release server images"
+
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker "${CLOUD_RUN_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push release-server image
+        env:
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: |
+          image_base="${CLOUD_RUN_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}/${CLI_RELEASE_IMAGE_NAME}"
+          image_sha="${image_base}:${GITHUB_SHA}"
+          image_version="${image_base}:${TAG}"
+          docker buildx build \
+            --push \
+            --target cli-release-server-runtime \
+            --build-arg "CLI_RELEASE_BUILD_COMMIT=${GITHUB_SHA}" \
+            --tag "$image_sha" \
+            --tag "$image_version" \
+            cli-release
+          echo "CLI_RELEASE_SERVER_IMAGE=$image_sha" >> "$GITHUB_ENV"
+
+      - name: Deploy release server to Cloud Run
+        run: |
+          gcloud run deploy "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$CLOUD_RUN_REGION" \
+            --image "$CLI_RELEASE_SERVER_IMAGE" \
+            --allow-unauthenticated \
+            --min-instances "$CLOUD_RUN_MIN_INSTANCES" \
+            --max-instances "$CLOUD_RUN_MAX_INSTANCES" \
+            --set-env-vars "CLI_RELEASE_GITHUB_REPOSITORY=futex-ai/redloop,CLI_RELEASE_PUBLIC_RELEASE_SERVER_URL=${REDLOOP_RELEASE_SERVER_URL},CLI_RELEASE_DEFAULT_BINARY=redloop-cli,CLI_RELEASE_BINARIES=redloop-cli,CLI_RELEASE_LOG_FORMAT=json,CLI_RELEASE_LOG_LEVEL=info" \
+            --set-secrets "CLI_RELEASE_GITHUB_TOKEN=redloop-cli-release-github-token:latest" \
+            --labels "service=redloop-cli-release,owner=redloop,environment=prod,cost-center=internal"
+
+      - name: Smoke test Cloud Run release server
+        env:
+          TARGET: x86_64-unknown-linux-gnu
+          VERSION: ${{ needs.release-plz-release.outputs.version }}
+        run: |
+          curl --fail --silent --show-error "$REDLOOP_RELEASE_SERVER_URL/"
+          curl --fail --silent --show-error "$REDLOOP_RELEASE_SERVER_URL/redloop-cli"
+          curl --fail --silent --show-error "$REDLOOP_RELEASE_SERVER_URL/releases/latest"
+          curl --fail --silent --show-error "$REDLOOP_RELEASE_SERVER_URL/releases/latest/redloop-cli/${TARGET}"
+          curl --fail --silent --show-error \
+            "$REDLOOP_RELEASE_SERVER_URL/releases/download/redloop-cli/${VERSION}/${TARGET}" \
+            >/dev/null
+
+  release-plz-pr:
+    name: Release-plz PR
+    needs: release-plz-release
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.tag == ''
+    runs-on: ubuntu-latest-m
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
+
+      - name: Install system dependencies
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq pkg-config
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RELEASE_PLZ_TOOLCHAIN}"
+          rustup default "${RELEASE_PLZ_TOOLCHAIN}"
+
+      - name: Validate package manifests
+        run: scripts/cli-release.sh verify-package-manifests Cargo.toml
+
+      - name: Run release-plz release-pr
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
