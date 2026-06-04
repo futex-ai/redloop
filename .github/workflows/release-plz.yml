@@ -135,6 +135,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ needs.release-plz-release.outputs.tag }}
 
       - name: Configure private Cargo git dependencies
