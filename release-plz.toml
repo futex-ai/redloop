@@ -1,0 +1,28 @@
+[workspace]
+changelog_update = false
+git_only = true
+git_release_enable = false
+git_tag_enable = false
+publish = false
+release = false
+release_always = false
+semver_check = true
+
+[[package]]
+name = "redloop-cli"
+changelog_include = [
+    "redloop",
+]
+changelog_path = "./CHANGELOG.md"
+changelog_update = true
+git_release_draft = true
+git_release_enable = true
+git_release_name = "Redloop CLI v{{ version }}"
+git_release_type = "auto"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+publish = false
+release = true
+
+[changelog]
+protect_breaking_commits = true

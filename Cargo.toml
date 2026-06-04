@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/redloop",
+    "crates/redloop-cli",
+    "xtask",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.2.0"
+license = "MIT"
+authors = ["Polybase"]
+repository = "https://github.com/futex-ai/redloop"
+
+[workspace.dependencies]
+cli-updater = { version = "0.1.0", git = "https://github.com/futex-ai/cli-release.git", rev = "d520dda22928e7377a932dd4d5bfd7b9c6acbfc4", package = "cli-updater" }
+redloop = { version = "0.2.0", path = "crates/redloop" }

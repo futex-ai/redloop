@@ -1,0 +1,99 @@
+# Redloop
+
+`redloop` is a Redis-backed Rust job queue library with:
+
+## Responsibilities
+
+- Provide Redis-backed ASAP and scheduled job queues.
+- Expose enqueue, inspection, and worker runtimes behind traits.
+- Support retries, heartbeats, leases, and operator mutations.
+
+## What This Crate Does
+
+- ASAP and scheduled jobs
+- adaptive polling workers
+- transient reserve timeout backoff without aborting active jobs
+- lease + heartbeat safety
+- retry and reschedule flows
+- durable rerun requests when a job is enqueued during its own active lease
+- namespace-scoped queues
+- operator-facing query and mutation APIs
+- trait-first runtime seams for enqueue and worker behavior
+
+## Quick Start
+
+```rust
+use redloop::{ConnectConfig, RedisDeployment, RedisRedloopClient};
+
+# async fn example() -> redloop::Result<()> {
+let client = RedisRedloopClient::connect(ConnectConfig {
+    deployment: RedisDeployment::Standalone {
+        url: "redis://127.0.0.1/".to_owned(),
+    },
+    key_prefix: "redloop".to_owned(),
+    command_timeout: std::time::Duration::from_secs(5),
+}).await?;
+client
+    .namespace("notifications".to_owned())
+    .job("welcome-email:user-42")
+    .execute()
+    .await?;
+# Ok(())
+# }
+```
+
+## Development
+
+```sh
+cargo test -p redloop
+cargo clippy -p redloop --all-targets --all-features -- -D warnings
+cargo xtask check
+```
+
+Core checks:
+
+```bash
+cargo test -p redloop
+cargo build -p redloop --example basic
+cargo clippy -p redloop --all-targets --all-features -- -D warnings
+```
+
+The protocol contract for this crate lives in:
+
+- `docs/protocol/redloop/README.md`
+- `docs/protocol/redloop/api.md`
+- `docs/protocol/redloop/redis-layout.md`
+- `plans/README.md`
+
+Key code entry points:
+
+- `src/lib.rs` — public trait exports plus the `RedisRedloopClient` adapter alias
+- `src/contract.rs` — `RedloopClient`, `RedloopNamespace`, enqueue-builder traits, and dyn aliases
+- `src/client/` — Redis-backed concrete client and namespace implementation
+- `src/worker/` — `JobHandler`, `RedloopWorkerRuntime`, and the concrete worker runtime
+- `src/redis_store/` — Redis key layout, Lua flows, and query paths
+- `src/redis_store/scripts/` — embedded Lua program assets loaded by the Redis store modules
+
+Downstream crates should depend on the exported dyn traits. Binaries and other
+composition roots may still construct `RedisRedloopClient` concretely and then
+erase it to those traits before injection.
+
+Worker reserve calls treat Redis timeouts as transient queue pressure. The
+worker logs the timeout, backs off using the configured polling delay, and
+continues running so already leased jobs can finish, heartbeat, and be
+acknowledged before the next reserve attempt.
+
+### Key Code
+
+- `src/lib.rs` - public exports for the Redis client, queue traits, and worker runtime.
+- `src/contract.rs` - enqueue, namespace, and client trait boundaries.
+- `src/client.rs` - concrete Redis-backed queue client and namespace implementation.
+- `src/worker.rs` - job-handler and worker-runtime implementation.
+- `src/redis_store/` - Redis key layout, Lua flows, and query paths.
+
+### Related Docs
+
+- [`../../docs/protocol/redloop/README.md`](../../docs/protocol/redloop/README.md)
+- [`../../docs/protocol/redloop/api.md`](../../docs/protocol/redloop/api.md)
+- [`../../docs/protocol/redloop/redis-layout.md`](../../docs/protocol/redloop/redis-layout.md)
+- [`../../plans/README.md`](../../plans/README.md)
