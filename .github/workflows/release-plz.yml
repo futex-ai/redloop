@@ -54,7 +54,7 @@ jobs:
 
       - name: Configure private Cargo git dependencies
         env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CLI_RELEASE_REPO_TOKEN }}
+          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
         run: scripts/configure-private-cargo-git.sh
 
       - name: Install system dependencies
@@ -134,7 +134,7 @@ jobs:
 
       - name: Configure private Cargo git dependencies
         env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CLI_RELEASE_REPO_TOKEN }}
+          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
         run: scripts/configure-private-cargo-git.sh
 
       - name: Install Linux dependencies
@@ -232,7 +232,7 @@ jobs:
         with:
           repository: ${{ env.CLI_RELEASE_REPO }}
           path: cli-release
-          token: ${{ secrets.CLI_RELEASE_REPO_TOKEN || github.token }}
+          token: ${{ secrets.CI_GITHUB_FUTEX_SHARED || github.token }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -320,7 +320,7 @@ jobs:
 
       - name: Configure private Cargo git dependencies
         env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CLI_RELEASE_REPO_TOKEN }}
+          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
         run: scripts/configure-private-cargo-git.sh
 
       - name: Install system dependencies
