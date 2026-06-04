@@ -52,11 +52,6 @@ jobs:
           persist-credentials: false
           ref: ${{ github.ref_name }}
 
-      - name: Configure private Cargo git dependencies
-        env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
-        run: scripts/configure-private-cargo-git.sh
-
       - name: Install system dependencies
         timeout-minutes: 10
         run: |
@@ -131,11 +126,6 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.release-plz-release.outputs.tag }}
-
-      - name: Configure private Cargo git dependencies
-        env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
-        run: scripts/configure-private-cargo-git.sh
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -224,15 +214,10 @@ jobs:
     if: needs.release-plz-release.outputs.releases_created == 'true'
     runs-on: ubuntu-latest-m
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Check out shared cli-release repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.CLI_RELEASE_REPO }}
-          path: cli-release
-          token: ${{ secrets.CI_GITHUB_FUTEX_SHARED || github.token }}
+        run: git clone --depth 1 "https://github.com/${CLI_RELEASE_REPO}.git" cli-release
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -317,11 +302,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.ref_name }}
-
-      - name: Configure private Cargo git dependencies
-        env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
-        run: scripts/configure-private-cargo-git.sh
 
       - name: Install system dependencies
         timeout-minutes: 10

@@ -37,18 +37,12 @@ The `Redloop CLI Release` workflow:
 
 Required GitHub secrets:
 
-- `CI_GITHUB_FUTEX_SHARED` - read access to `futex-ai/cli-release` for
-  Cargo's private `cli-updater` git dependency and shared release-server
-  checkout. The token must be exposed to the `futex-ai/redloop` repository and
-  must have read-only Contents access to `futex-ai/cli-release`.
 - `GCP_WORKLOAD_IDENTITY_PROVIDER` - workload identity provider for GCP deploys.
 - `GCP_SERVICE_ACCOUNT` - deploy service account email.
 
-CI configures Cargo with `scripts/configure-private-cargo-git.sh`. The
-workflows pass `CI_GITHUB_FUTEX_SHARED` to that script as
-`CLI_RELEASE_REPO_TOKEN`; the script then sets Git URL rewrites for the private
-dependency and runs `git ls-remote` against `futex-ai/cli-release` before Cargo
-starts, so token access failures surface before the Rust build.
+The shared `futex-ai/cli-release` repository is public. Cargo fetches the
+`cli-updater` git dependency directly, and the release workflow clones the
+shared repository over public HTTPS without GitHub credentials.
 
 Required GCP setup:
 

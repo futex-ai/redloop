@@ -18,7 +18,6 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  CLI_RELEASE_REPO: futex-ai/cli-release
   RUST_TOOLCHAIN: 1.89.0
 
 jobs:
@@ -31,11 +30,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Configure private Cargo git dependencies
-        env:
-          CLI_RELEASE_REPO_TOKEN: ${{ secrets.CI_GITHUB_FUTEX_SHARED }}
-        run: scripts/configure-private-cargo-git.sh
 
       - name: Install Rust toolchain
         run: |
