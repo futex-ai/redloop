@@ -97,6 +97,12 @@ pub(super) fn command_timeout(operation: &'static str) -> Error {
     }
 }
 
+pub(super) fn lease_mismatch(job_id: &'static str) -> Error {
+    Error::LeaseMismatch {
+        job_id: job_id.to_owned(),
+    }
+}
+
 pub(super) async fn run_with_timeout(
     worker: Worker,
     handler: Arc<dyn RuntimeHandler>,

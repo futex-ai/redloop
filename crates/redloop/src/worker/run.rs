@@ -10,10 +10,11 @@ use tokio::task::{JoinError, JoinSet};
 use crate::clock::{Clock, WorkerCoordinator};
 use crate::config::{Timestamp, WorkerConfig};
 use crate::error::{Error, Result};
-use crate::store::{FailureAction, FailureRequest, QueueStore};
-use crate::types::JobOutcome;
+use crate::store::QueueStore;
 
+use super::completion::resolve_completed;
 use super::handler::{DynJobHandler, RedloopWorkerRuntime, RuntimeHandler, TraitHandlerAdapter};
+use super::heartbeat::heartbeat_active;
 use super::leases::{
     ActiveLease, CompletedLease, new_lease_tokens, next_poll_delay, sleep_duration,
 };
@@ -108,7 +109,15 @@ impl Worker {
                     }
                 }
                 _ = heartbeat_tick.tick(), if !active.is_empty() => {
-                    if recoverable_runtime_result("heartbeat", self.heartbeat_active(&active).await)? {
+                    let result = heartbeat_active(
+                        &self.namespace,
+                        self.store.as_ref(),
+                        self.clock.as_ref(),
+                        &self.config,
+                        &mut active,
+                    )
+                    .await;
+                    if recoverable_runtime_result("heartbeat", result)? {
                         runtime_backoff_until = Some(runtime_backoff_deadline(self.config.poll_interval_min));
                     }
                 }
@@ -200,8 +209,24 @@ impl Worker {
             let Some(completed) = pending_completed.remove(&job_id) else {
                 continue;
             };
-            match self.resolve_completed(&completed).await {
+            match resolve_completed(
+                &self.namespace,
+                self.store.as_ref(),
+                self.clock.as_ref(),
+                &self.config,
+                &completed,
+            )
+            .await
+            {
                 Ok(()) => {
+                    active.remove(&completed.job_id);
+                }
+                Err(Error::LeaseMismatch { job_id }) => {
+                    tracing::warn!(
+                        job_id = %completed.job_id,
+                        lease_mismatch_job_id = %job_id,
+                        "worker completion lost lease; dropping local lease attempt"
+                    );
                     active.remove(&completed.job_id);
                 }
                 Err(error) if error.is_recoverable_worker_runtime() => {
@@ -217,82 +242,5 @@ impl Worker {
             }
         }
         Ok(should_back_off)
-    }
-
-    async fn heartbeat_active(&self, active: &HashMap<String, ActiveLease>) -> Result<()> {
-        let now = self.clock.now();
-        for lease in active.values() {
-            self.store
-                .heartbeat(
-                    &self.namespace,
-                    &self.config.worker_id,
-                    &lease.job_id,
-                    &lease.lease_token,
-                    now,
-                    self.config.lease_duration,
-                )
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn resolve_completed(&self, completed: &CompletedLease) -> Result<()> {
-        match &completed.result {
-            Ok(JobOutcome::Complete) => {
-                self.store
-                    .ack(
-                        &self.namespace,
-                        &self.config.worker_id,
-                        &completed.job_id,
-                        &completed.lease_token,
-                    )
-                    .await
-            }
-            Ok(JobOutcome::Reschedule { schedule_at }) => {
-                self.store
-                    .complete_and_reschedule(
-                        &self.namespace,
-                        &self.config.worker_id,
-                        &completed.job_id,
-                        &completed.lease_token,
-                        schedule_at.to_owned(),
-                        self.clock.now(),
-                    )
-                    .await
-            }
-            Ok(JobOutcome::Fail { .. }) => self
-                .store
-                .fail_or_retry(
-                    &self.namespace,
-                    FailureRequest {
-                        worker_id: self.config.worker_id.clone(),
-                        job_id: completed.job_id.clone(),
-                        lease_token: completed.lease_token.clone(),
-                        action: FailureAction::Terminal,
-                        retry_policy: self.config.retry_policy.clone(),
-                        now: self.clock.now(),
-                    },
-                )
-                .await
-                .map(|_| ()),
-            Err(message) => {
-                let now = self.clock.now();
-                self.store
-                    .fail_or_retry(
-                        &self.namespace,
-                        FailureRequest {
-                            worker_id: self.config.worker_id.clone(),
-                            job_id: completed.job_id.clone(),
-                            lease_token: completed.lease_token.clone(),
-                            action: FailureAction::Retryable,
-                            retry_policy: self.config.retry_policy.clone(),
-                            now,
-                        },
-                    )
-                    .await?;
-                tracing::debug!(job_id = %completed.job_id, error = %message, "worker handled retryable failure");
-                Ok(())
-            }
-        }
     }
 }

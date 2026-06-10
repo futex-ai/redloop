@@ -6,15 +6,16 @@ use std::time::Duration;
 
 use unimock::{MockFn as _, Unimock, matching};
 
+use crate::error::InvalidConfigKind;
 use crate::store::{QueueStore, QueueStoreMock};
 use crate::worker::handler::RuntimeHandler;
 
 use super::super::support::worker_config;
 use super::support::{
-    CompleteImmediately, WaitForFlagComplete, assert_invalid_config, command_timeout, reap_ok,
-    reserve_empty_repeatedly, reserve_job, reserve_sentinel_error, run_with_timeout, worker,
+    CompleteImmediately, WaitForFlagComplete, assert_invalid_config, command_timeout,
+    lease_mismatch, reap_ok, reserve_empty_repeatedly, reserve_job, reserve_sentinel_error,
+    run_with_timeout, worker,
 };
-use crate::error::InvalidConfigKind;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn heartbeat_timeout_does_not_exit_worker() {
@@ -125,5 +126,60 @@ async fn completion_ack_timeout_is_recoverable_and_keeps_lease_active() {
     let result = run_with_timeout(worker, handler).await;
 
     assert!(post_ack_heartbeat_seen.load(Ordering::SeqCst));
+    assert_invalid_config(result, InvalidConfigKind::EmptyRedisNodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_lease_mismatch_drops_lease_and_keeps_worker_running() {
+    let mut config = worker_config();
+    config.heartbeat_interval = Duration::from_millis(1);
+    config.poll_interval_min = Duration::from_millis(1);
+    config.poll_interval_max = Duration::from_millis(1);
+    let heartbeat_seen = Arc::new(AtomicBool::new(false));
+    let heartbeat_seen_store = Arc::clone(&heartbeat_seen);
+    let handler_release = Arc::new(AtomicBool::new(false));
+    let store: Arc<dyn QueueStore> = Arc::new(Unimock::new((
+        reserve_job("job-1", "lease-1"),
+        QueueStoreMock::heartbeat
+            .next_call(matching!(
+                "workers",
+                "worker-test",
+                "job-1",
+                "lease-1",
+                _,
+                _
+            ))
+            .answers_arc(Arc::new(move |_, _, _, _, _, _, _| {
+                heartbeat_seen_store.store(true, Ordering::SeqCst);
+                Err(lease_mismatch("job-1"))
+            })),
+        reap_ok(),
+        reserve_sentinel_error(),
+    )));
+    let worker = worker(store, config);
+    let handler: Arc<dyn RuntimeHandler> = Arc::new(WaitForFlagComplete {
+        flag: handler_release,
+    });
+
+    let result = run_with_timeout(worker, handler).await;
+
+    assert!(heartbeat_seen.load(Ordering::SeqCst));
+    assert_invalid_config(result, InvalidConfigKind::EmptyRedisNodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_lease_mismatch_drops_completion_and_keeps_worker_running() {
+    let store: Arc<dyn QueueStore> = Arc::new(Unimock::new((
+        reserve_job("job-1", "lease-1"),
+        QueueStoreMock::ack
+            .next_call(matching!("workers", "worker-test", "job-1", "lease-1"))
+            .returns(Err(lease_mismatch("job-1"))),
+        reserve_sentinel_error(),
+    )));
+    let worker = worker(store, worker_config());
+    let handler: Arc<dyn RuntimeHandler> = Arc::new(CompleteImmediately);
+
+    let result = run_with_timeout(worker, handler).await;
+
     assert_invalid_config(result, InvalidConfigKind::EmptyRedisNodes);
 }

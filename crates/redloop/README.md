@@ -13,6 +13,7 @@
 - ASAP and scheduled jobs
 - adaptive polling workers
 - transient Redis timeout and transport recovery without aborting active jobs
+- at-least-once delivery with lease-loss tolerance
 - lease + heartbeat safety
 - retry and reschedule flows
 - durable rerun requests when a job is enqueued during its own active lease
@@ -84,6 +85,13 @@ The worker logs the error, backs off using the configured polling delay, and
 continues running. If completion acknowledgement fails transiently after a
 handler finishes, the lease remains active and heartbeated while Redloop retries
 the completion mutation.
+
+Redloop provides at-least-once delivery. Handlers must be safe to run more than
+once for the same `job_id`, and completion is only applied while the worker still
+owns the matching lease token. If heartbeat or completion receives
+`LeaseMismatch`, the worker treats that lease attempt as terminal, drops local
+tracking for it, logs the lease loss, and keeps polling; the queue's current
+state wins.
 
 ### Key Code
 

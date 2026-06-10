@@ -80,6 +80,10 @@ pub trait JobHandler: Send + Sync {
 `redloop` is ID-only. Application data must be stored elsewhere and looked up
 by `job_id`.
 
+`redloop` provides at-least-once delivery. Worker handlers must tolerate more
+than one execution for the same `job_id`, and any externally visible side
+effects must be idempotent or deduplicated by application code.
+
 The Redis-backed concrete client, namespace handle, worker runtime, and enqueue
 builder implementations may stay internal to the crate. Downstream crates
 should depend on the dyn traits and composition roots should construct
@@ -221,8 +225,11 @@ pub enum FailedSelector { JobId(String), OlderThan(Timestamp), All }
   heartbeat, lease reaping, ack, reschedule completion, or fail/retry
   completion are recoverable runtime errors: the runtime must log, back off,
   and keep the worker process alive.
+- `LeaseMismatch` during heartbeat or completion is terminal for that lease
+  attempt, not fatal to the worker process: the runtime must log it, drop local
+  lease or completion tracking for that attempt, and keep polling.
 - invalid config, invalid stored data, invalid timestamps, job-id contract
-  violations, lease/data-contract errors, and worker task join failures remain
+  violations, data-contract errors, and worker task join failures remain
   fatal runtime errors returned from `run(...)`.
 - reserve-timeout backoff must not starve active-job joins, heartbeats, or
   lease reaping; those runtime paths remain eligible before the next reserve
@@ -266,7 +273,14 @@ If a completion mutation fails with a recoverable Redis runtime error after the
 handler has returned, the runtime must keep the completed lease in its active
 set, continue heartbeating it, and retry the same completion result after
 backoff. The job must not be removed from in-memory active lease tracking until
-ack, reschedule completion, or fail/retry completion succeeds.
+ack, reschedule completion, or fail/retry completion succeeds or the runtime
+receives `LeaseMismatch`.
+
+`LeaseMismatch` means the worker no longer owns the lease attempt. The runtime
+must drop the stale local lease or completion attempt and continue; it must not
+pretend the requested acknowledgement, failure, or reschedule succeeded. The
+authoritative queue state wins, so the job may already be completed, failed,
+rescheduled, requeued, or reserved by another worker.
 
 ## Example
 

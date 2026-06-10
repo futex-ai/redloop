@@ -14,6 +14,23 @@
 
 The exact Redis key layout and atomic mutation flows are defined in [Redloop Redis Layout](./redis-layout.md).
 
+## At-Least-Once Delivery
+
+Redloop provides at-least-once delivery. A job can run more than once when a
+worker stops, a lease expires, a lease is reaped, a transient completion result
+is ambiguous, or another process takes over the current run.
+
+Application handlers must be idempotent for a given `job_id` or protect their
+own side effects with application-level deduplication. Redloop only applies
+heartbeat and completion mutations while the caller still owns the matching
+lease token.
+
+`LeaseMismatch` means the worker no longer owns that lease attempt. Worker
+runtimes must treat it as terminal for that local attempt, log it, drop local
+tracking for the lease or completion result, and continue polling; they must not
+report it as a fatal worker-process error. The queue's current state wins, so
+the handler result from the lost lease may not be applied.
+
 ## Core Model
 
 Every job belongs to exactly one namespace. Namespaces isolate queue state, failed jobs, workers, retry policy, and counts.
@@ -188,8 +205,11 @@ Worker rules:
 - Redis command timeouts and transient Redis transport failures from reserve,
   heartbeat, reap, and completion mutations are recoverable runtime errors:
   workers log them, back off, and continue running
+- `LeaseMismatch` from heartbeat or completion is terminal for that lease
+  attempt, not fatal to the worker process: workers log it, drop local lease or
+  completion tracking, and keep polling
 - invalid config, invalid stored data, invalid timestamps, job-id contract
-  violations, lease/data-contract errors, and worker task join failures remain fatal
+  violations, data-contract errors, and worker task join failures remain fatal
 - handlers receive only `job_id`
 - lease token, failure counters, and schedule metadata remain internal to the library runtime
 - the handler contract is `Result<JobOutcome, E>`
@@ -262,6 +282,12 @@ If ack, reschedule completion, or fail/retry completion hits a recoverable
 Redis runtime error after the handler returns, the worker keeps the completed
 lease active, continues heartbeating it, and retries the same completion result
 after backoff.
+
+If heartbeat or completion returns `LeaseMismatch`, the worker must drop the
+local lease attempt without retrying that handler result. This is not a
+successful acknowledgement, failure, or reschedule; it means the worker lost
+ownership and the authoritative queue state determines whether the job was
+already completed, requeued, failed, rescheduled, or reserved by another worker.
 
 Failed jobs retain only:
 
