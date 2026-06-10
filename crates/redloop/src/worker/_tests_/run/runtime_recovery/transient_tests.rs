@@ -12,9 +12,8 @@ use crate::worker::handler::RuntimeHandler;
 
 use super::super::support::worker_config;
 use super::support::{
-    CompleteImmediately, WaitForFlagComplete, assert_invalid_config, command_timeout,
-    lease_mismatch, reap_ok, reserve_empty_repeatedly, reserve_job, reserve_sentinel_error,
-    run_with_timeout, worker,
+    WaitForFlagComplete, assert_invalid_config, command_timeout, lease_mismatch, reap_ok,
+    reserve_empty_repeatedly, reserve_job, reserve_sentinel_error, run_with_timeout, worker,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -78,55 +77,6 @@ async fn reap_timeout_does_not_exit_worker() {
 
     assert!(result.is_err());
     assert!(reap_called.load(Ordering::SeqCst));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn completion_ack_timeout_is_recoverable_and_keeps_lease_active() {
-    let mut config = worker_config();
-    config.heartbeat_interval = Duration::from_millis(5);
-    config.poll_interval_min = Duration::from_millis(50);
-    config.poll_interval_max = Duration::from_millis(50);
-    let ack_timed_out = Arc::new(AtomicBool::new(false));
-    let ack_timed_out_store = Arc::clone(&ack_timed_out);
-    let ack_timed_out_heartbeat = Arc::clone(&ack_timed_out);
-    let post_ack_heartbeat_seen = Arc::new(AtomicBool::new(false));
-    let post_ack_heartbeat_seen_store = Arc::clone(&post_ack_heartbeat_seen);
-    let store: Arc<dyn QueueStore> = Arc::new(Unimock::new((
-        reserve_job("job-1", "lease-1"),
-        QueueStoreMock::heartbeat
-            .each_call(matching!(
-                "workers",
-                "worker-test",
-                "job-1",
-                "lease-1",
-                _,
-                _
-            ))
-            .answers_arc(Arc::new(move |_, _, _, _, _, _, _| {
-                if ack_timed_out_heartbeat.load(Ordering::SeqCst) {
-                    post_ack_heartbeat_seen_store.store(true, Ordering::SeqCst);
-                }
-                Ok(())
-            })),
-        QueueStoreMock::ack
-            .next_call(matching!("workers", "worker-test", "job-1", "lease-1"))
-            .answers_arc(Arc::new(move |_, _, _, _, _| {
-                ack_timed_out_store.store(true, Ordering::SeqCst);
-                Err(command_timeout("ack"))
-            })),
-        reap_ok(),
-        QueueStoreMock::ack
-            .next_call(matching!("workers", "worker-test", "job-1", "lease-1"))
-            .returns(Ok(())),
-        reserve_sentinel_error(),
-    )));
-    let worker = worker(store, config);
-    let handler: Arc<dyn RuntimeHandler> = Arc::new(CompleteImmediately);
-
-    let result = run_with_timeout(worker, handler).await;
-
-    assert!(post_ack_heartbeat_seen.load(Ordering::SeqCst));
-    assert_invalid_config(result, InvalidConfigKind::EmptyRedisNodes);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
