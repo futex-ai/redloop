@@ -10,13 +10,18 @@ use tokio::task::{JoinError, JoinSet};
 use crate::clock::{Clock, WorkerCoordinator};
 use crate::config::{Timestamp, WorkerConfig};
 use crate::error::{Error, Result};
-use crate::store::{FailureAction, FailureRequest, QueueStore, ReservedJob};
+use crate::store::{FailureAction, FailureRequest, QueueStore};
 use crate::types::JobOutcome;
 
 use super::handler::{DynJobHandler, RedloopWorkerRuntime, RuntimeHandler, TraitHandlerAdapter};
 use super::leases::{
     ActiveLease, CompletedLease, new_lease_tokens, next_poll_delay, sleep_duration,
 };
+use super::recovery::{
+    recoverable_runtime_result, runtime_backoff_deadline, runtime_backoff_ready,
+    runtime_backoff_remaining,
+};
+use super::spawning::spawn_job;
 
 /// Worker handle for one namespace.
 pub(crate) struct Worker {
@@ -31,14 +36,6 @@ pub(crate) struct Worker {
 impl RedloopWorkerRuntime for Worker {
     async fn run(&self, handler: DynJobHandler) -> Result<()> {
         Worker::run(self, handler).await
-    }
-}
-
-fn retryable_reserve_error(error: &Error) -> bool {
-    match error {
-        Error::CommandTimedOut { operation, .. } => *operation == "reserve",
-        Error::Redis { operation, source } => *operation == "reserve" && source.is_timeout(),
-        _ => false,
     }
 }
 
@@ -76,32 +73,57 @@ impl Worker {
         let mut reap_tick = tokio::time::interval(self.config.reap_interval);
         let mut join_set = JoinSet::new();
         let mut active = HashMap::<String, ActiveLease>::new();
+        let mut pending_completed = HashMap::<String, CompletedLease>::new();
         let mut poll_delay = self.config.poll_interval_min;
         let mut next_schedule_at: Option<Timestamp> = None;
         let mut reserve_sleep: Option<(Duration, bool)> = None;
+        let mut runtime_backoff_until = None;
 
         loop {
-            self.drain_completed_jobs(&mut join_set, &mut active)
-                .await?;
+            self.drain_joined_jobs(&mut join_set, &mut pending_completed)?;
+            if runtime_backoff_ready(runtime_backoff_until) {
+                runtime_backoff_until = None;
+            }
+            if runtime_backoff_until.is_none()
+                && self
+                    .resolve_pending_completed(&mut active, &mut pending_completed)
+                    .await?
+            {
+                runtime_backoff_until =
+                    Some(runtime_backoff_deadline(self.config.poll_interval_min));
+            }
 
             let capacity = self.config.concurrency.saturating_sub(active.len());
             let now = self.clock.now();
             let sleep_for = reserve_sleep
                 .map(|(duration, _)| duration)
                 .unwrap_or_else(|| sleep_duration(now, poll_delay, next_schedule_at));
+            let runtime_sleep_for = runtime_backoff_remaining(runtime_backoff_until);
 
             tokio::select! {
                 biased;
                 join_result = join_set.join_next(), if !join_set.is_empty() => {
                     if let Some(result) = join_result {
-                        self.resolve_join_result(result, &mut active).await?;
+                        self.record_join_result(result, &mut pending_completed)?;
                     }
                 }
                 _ = heartbeat_tick.tick(), if !active.is_empty() => {
-                    self.heartbeat_active(&active).await?;
+                    if recoverable_runtime_result("heartbeat", self.heartbeat_active(&active).await)? {
+                        runtime_backoff_until = Some(runtime_backoff_deadline(self.config.poll_interval_min));
+                    }
                 }
-                _ = reap_tick.tick() => {
-                    let _ = self.store.reap_expired(&self.namespace, self.clock.now(), self.config.concurrency).await?;
+                _ = reap_tick.tick(), if runtime_backoff_until.is_none() => {
+                    let result = self
+                        .store
+                        .reap_expired(&self.namespace, self.clock.now(), self.config.concurrency)
+                        .await
+                        .map(|_| ());
+                    if recoverable_runtime_result("reap_expired", result)? {
+                        runtime_backoff_until = Some(runtime_backoff_deadline(self.config.poll_interval_min));
+                    }
+                }
+                _ = self.coordinator.sleep(runtime_sleep_for), if runtime_backoff_until.is_some() => {
+                    runtime_backoff_until = None;
                 }
                 reserved = self.store.reserve(
                     &self.namespace,
@@ -109,24 +131,24 @@ impl Worker {
                     capacity,
                     self.clock.now(),
                     new_lease_tokens(capacity),
-                ), if capacity > 0 && reserve_sleep.is_none() => {
+                ), if capacity > 0 && reserve_sleep.is_none() && runtime_backoff_until.is_none() => {
                     match reserved {
                         Ok(reserved) => {
                             next_schedule_at = reserved.next_schedule_at;
                             if !reserved.jobs.is_empty() {
                                 poll_delay = self.config.poll_interval_min;
                                 for lease in reserved.jobs {
-                                    self.spawn_job(&mut join_set, &mut active, Arc::clone(&handler), lease);
+                                    spawn_job(&mut join_set, &mut active, Arc::clone(&handler), lease);
                                 }
                                 continue;
                             }
                             let now = self.clock.now();
                             reserve_sleep = Some((sleep_duration(now, poll_delay, next_schedule_at), true));
                         }
-                        Err(error) if retryable_reserve_error(&error) => {
+                        Err(error) if error.is_recoverable_worker_runtime() => {
                             tracing::warn!(
                                 error = %error,
-                                "worker reserve timed out; backing off before retry"
+                                "worker reserve hit recoverable Redis error; backing off before retry"
                             );
                             reserve_sleep = Some((poll_delay, false));
                             poll_delay = next_poll_delay(poll_delay, self.config.poll_interval_max);
@@ -145,52 +167,56 @@ impl Worker {
         }
     }
 
-    /// Resolves finished jobs before polling Redis so reserve backoff cannot delay acknowledgements.
-    async fn drain_completed_jobs(
+    /// Records finished jobs before polling Redis so reserve backoff cannot delay acknowledgements.
+    fn drain_joined_jobs(
         &self,
         join_set: &mut JoinSet<CompletedLease>,
-        active: &mut HashMap<String, ActiveLease>,
+        pending_completed: &mut HashMap<String, CompletedLease>,
     ) -> Result<()> {
         while let Some(result) = join_set.try_join_next() {
-            self.resolve_join_result(result, active).await?;
+            self.record_join_result(result, pending_completed)?;
         }
         Ok(())
     }
 
-    async fn resolve_join_result(
+    fn record_join_result(
         &self,
         join_result: std::result::Result<CompletedLease, JoinError>,
-        active: &mut HashMap<String, ActiveLease>,
+        pending_completed: &mut HashMap<String, CompletedLease>,
     ) -> Result<()> {
         let completed = join_result.map_err(|source| Error::WorkerTaskJoin { source })?;
-        active.remove(&completed.job_id);
-        self.resolve_completed(completed).await
+        pending_completed.insert(completed.job_id.clone(), completed);
+        Ok(())
     }
 
-    fn spawn_job(
+    async fn resolve_pending_completed(
         &self,
-        join_set: &mut JoinSet<CompletedLease>,
         active: &mut HashMap<String, ActiveLease>,
-        handler: Arc<dyn RuntimeHandler>,
-        lease: ReservedJob,
-    ) {
-        let job_id = lease.job_id.clone();
-        active.insert(
-            job_id.clone(),
-            ActiveLease {
-                job_id: lease.job_id.clone(),
-                lease_token: lease.lease_token.clone(),
-            },
-        );
-
-        join_set.spawn(async move {
-            let result = handler.handle(lease.job_id.clone()).await;
-            CompletedLease {
-                job_id: lease.job_id,
-                lease_token: lease.lease_token,
-                result,
+        pending_completed: &mut HashMap<String, CompletedLease>,
+    ) -> Result<bool> {
+        let mut should_back_off = false;
+        let job_ids = pending_completed.keys().cloned().collect::<Vec<_>>();
+        for job_id in job_ids {
+            let Some(completed) = pending_completed.remove(&job_id) else {
+                continue;
+            };
+            match self.resolve_completed(&completed).await {
+                Ok(()) => {
+                    active.remove(&completed.job_id);
+                }
+                Err(error) if error.is_recoverable_worker_runtime() => {
+                    tracing::warn!(
+                        job_id = %completed.job_id,
+                        error = %error,
+                        "worker completion resolution hit recoverable Redis error; keeping lease active and retrying"
+                    );
+                    pending_completed.insert(completed.job_id.clone(), completed);
+                    should_back_off = true;
+                }
+                Err(error) => return Err(error),
             }
-        });
+        }
+        Ok(should_back_off)
     }
 
     async fn heartbeat_active(&self, active: &HashMap<String, ActiveLease>) -> Result<()> {
@@ -210,8 +236,8 @@ impl Worker {
         Ok(())
     }
 
-    async fn resolve_completed(&self, completed: CompletedLease) -> Result<()> {
-        match completed.result {
+    async fn resolve_completed(&self, completed: &CompletedLease) -> Result<()> {
+        match &completed.result {
             Ok(JobOutcome::Complete) => {
                 self.store
                     .ack(
@@ -229,7 +255,7 @@ impl Worker {
                         &self.config.worker_id,
                         &completed.job_id,
                         &completed.lease_token,
-                        schedule_at,
+                        schedule_at.to_owned(),
                         self.clock.now(),
                     )
                     .await

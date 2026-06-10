@@ -185,6 +185,11 @@ Worker rules:
 - any successful reservation resets the poll delay to `poll_interval_min`
 - when no work is found, the runtime may shorten its sleep to the next known due `schedule_at`
 - the library manages heartbeats while a handler is running
+- Redis command timeouts and transient Redis transport failures from reserve,
+  heartbeat, reap, and completion mutations are recoverable runtime errors:
+  workers log them, back off, and continue running
+- invalid config, invalid stored data, invalid timestamps, job-id contract
+  violations, lease/data-contract errors, and worker task join failures remain fatal
 - handlers receive only `job_id`
 - lease token, failure counters, and schedule metadata remain internal to the library runtime
 - the handler contract is `Result<JobOutcome, E>`
@@ -252,6 +257,11 @@ On `Err(handler_error)` from the handler:
 On `Ok(JobOutcome::Fail { message })`, do not reschedule and move directly to `failed`.
 
 The `message` from `JobOutcome::Fail { ... }`, `Err(handler_error)`, or operator `force_fail(..., message)` is a runtime-only reason string. `redloop` must not persist it in Redis.
+
+If ack, reschedule completion, or fail/retry completion hits a recoverable
+Redis runtime error after the handler returns, the worker keeps the completed
+lease active, continues heartbeating it, and retries the same completion result
+after backoff.
 
 Failed jobs retain only:
 

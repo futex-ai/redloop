@@ -12,7 +12,7 @@
 
 - ASAP and scheduled jobs
 - adaptive polling workers
-- transient reserve timeout backoff without aborting active jobs
+- transient Redis timeout and transport recovery without aborting active jobs
 - lease + heartbeat safety
 - retry and reschedule flows
 - durable rerun requests when a job is enqueued during its own active lease
@@ -78,10 +78,12 @@ Downstream crates should depend on the exported dyn traits. Binaries and other
 composition roots may still construct `RedisRedloopClient` concretely and then
 erase it to those traits before injection.
 
-Worker reserve calls treat Redis timeouts as transient queue pressure. The
-worker logs the timeout, backs off using the configured polling delay, and
-continues running so already leased jobs can finish, heartbeat, and be
-acknowledged before the next reserve attempt.
+Worker reserve, heartbeat, reap, and completion calls treat Redis command
+timeouts and transient Redis transport failures as recoverable runtime errors.
+The worker logs the error, backs off using the configured polling delay, and
+continues running. If completion acknowledgement fails transiently after a
+handler finishes, the lease remains active and heartbeated while Redloop retries
+the completion mutation.
 
 ### Key Code
 

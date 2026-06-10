@@ -88,7 +88,7 @@ should depend on the dyn traits and composition roots should construct
 ## Types
 
 ```rust
-pub enum Error { NotFound, InvalidState, LeaseMismatch, InvalidConfig, Redis }
+pub enum Error { NotFound, InvalidState, LeaseMismatch, InvalidConfig, Redis, CommandTimedOut }
 
 pub struct ConnectConfig {
     pub deployment: RedisDeployment,
@@ -215,9 +215,15 @@ pub enum FailedSelector { JobId(String), OlderThan(Timestamp), All }
 - when a worker has fewer than `concurrency` in-flight jobs, the runtime must
   poll the reserve function for up to the remaining capacity in one round trip.
 - polling must use adaptive backoff bounded by `poll_interval_min` and `poll_interval_max`.
-- Redis or command timeouts while polling the reserve function are transient:
-  the runtime must log, back off, and keep the worker process alive so active
-  jobs can finish; non-timeout reserve errors remain fatal runtime errors.
+- Redloop owns worker-runtime recoverability classification so callers do not
+  have to guess which `run(...)` errors are safe to retry.
+- command timeouts and transient Redis transport failures during reserve,
+  heartbeat, lease reaping, ack, reschedule completion, or fail/retry
+  completion are recoverable runtime errors: the runtime must log, back off,
+  and keep the worker process alive.
+- invalid config, invalid stored data, invalid timestamps, job-id contract
+  violations, lease/data-contract errors, and worker task join failures remain
+  fatal runtime errors returned from `run(...)`.
 - reserve-timeout backoff must not starve active-job joins, heartbeats, or
   lease reaping; those runtime paths remain eligible before the next reserve
   attempt.
@@ -255,6 +261,12 @@ Each lease must resolve with exactly one result:
 `Reschedule` is the explicit "finish this run and schedule the same job again"
 path. It starts a fresh failure lifecycle for the next run. `Err(error)` is the
 explicit retry path.
+
+If a completion mutation fails with a recoverable Redis runtime error after the
+handler has returned, the runtime must keep the completed lease in its active
+set, continue heartbeating it, and retry the same completion result after
+backoff. The job must not be removed from in-memory active lease tracking until
+ack, reschedule completion, or fail/retry completion succeeds.
 
 ## Example
 

@@ -2,4 +2,5 @@
 
 mod pending_reserve_tests;
 mod reserve_timeout_tests;
+mod runtime_recovery;
 mod support;
