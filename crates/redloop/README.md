@@ -66,7 +66,7 @@ The protocol contract for this crate lives in:
 - `docs/protocol/redloop/redis-layout.md`
 - `plans/README.md`
 
-Key code entry points:
+### Key Code
 
 - `src/lib.rs` — public trait exports plus the `RedisRedloopClient` adapter alias
 - `src/contract.rs` — `RedloopClient`, `RedloopNamespace`, enqueue-builder traits, and dyn aliases

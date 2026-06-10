@@ -43,6 +43,7 @@ Each namespace uses these keys:
 - `<key_prefix>:namespaces` — `SET`
   Purpose:
   - stores known namespace names for `list_namespaces`
+  - is catalog-only; failed writes must not invalidate already-successful queue mutations
 
 - `<p>{<ns>}:cfg` — `HASH`
   Purpose:
