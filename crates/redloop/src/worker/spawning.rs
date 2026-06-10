@@ -8,22 +8,16 @@ use tokio::task::JoinSet;
 use crate::store::ReservedJob;
 
 use super::handler::RuntimeHandler;
-use super::leases::{ActiveLease, CompletedLease};
+use super::leases::{ActiveLease, CompletedLease, LeaseAttemptKey};
 
 pub(crate) fn spawn_job(
     join_set: &mut JoinSet<CompletedLease>,
-    active: &mut HashMap<String, ActiveLease>,
+    active: &mut HashMap<LeaseAttemptKey, ActiveLease>,
     handler: Arc<dyn RuntimeHandler>,
     lease: ReservedJob,
 ) {
-    let job_id = lease.job_id.clone();
-    active.insert(
-        job_id.clone(),
-        ActiveLease {
-            job_id: lease.job_id.clone(),
-            lease_token: lease.lease_token.clone(),
-        },
-    );
+    let active_lease = ActiveLease::new(lease.job_id.clone(), lease.lease_token.clone());
+    active.insert(active_lease.attempt_key(), active_lease);
 
     join_set.spawn(async move {
         let result = handler.handle(lease.job_id.clone()).await;

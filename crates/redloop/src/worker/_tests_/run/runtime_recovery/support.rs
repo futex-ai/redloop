@@ -88,6 +88,7 @@ pub(super) fn reap_ok() -> impl Clause {
     QueueStoreMock::reap_expired
         .each_call(matching!("workers", _, 1))
         .answers_arc(Arc::new(|_, _, _, _| Ok(0)))
+        .at_least_times(0)
 }
 
 pub(super) fn command_timeout(operation: &'static str) -> Error {
@@ -138,6 +139,22 @@ pub(super) struct CompleteImmediately;
 #[async_trait]
 impl RuntimeHandler for CompleteImmediately {
     async fn handle(&self, _job_id: String) -> std::result::Result<JobOutcome, String> {
+        Ok(JobOutcome::Complete)
+    }
+}
+
+pub(super) struct WaitForReleaseComplete {
+    pub(super) release: Arc<AtomicBool>,
+    pub(super) finished: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl RuntimeHandler for WaitForReleaseComplete {
+    async fn handle(&self, _job_id: String) -> std::result::Result<JobOutcome, String> {
+        while !self.release.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        self.finished.store(true, Ordering::SeqCst);
         Ok(JobOutcome::Complete)
     }
 }

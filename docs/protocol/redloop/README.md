@@ -26,10 +26,12 @@ heartbeat and completion mutations while the caller still owns the matching
 lease token.
 
 `LeaseMismatch` means the worker no longer owns that lease attempt. Worker
-runtimes must treat it as terminal for that local attempt, log it, drop local
-tracking for the lease or completion result, and continue polling; they must not
-report it as a fatal worker-process error. The queue's current state wins, so
-the handler result from the lost lease may not be applied.
+runtimes must treat it as terminal for that local attempt, log it, and continue
+polling; they must not report it as a fatal worker-process error. Heartbeat
+lease loss stops further heartbeats for that attempt while it still counts
+against local concurrency until its handler joins. Completion lease loss
+discards only that attempt's completed result. The queue's current state wins,
+so the handler result from the lost lease may not be applied.
 
 ## Core Model
 
@@ -206,8 +208,9 @@ Worker rules:
   heartbeat, reap, and completion mutations are recoverable runtime errors:
   workers log them, back off, and continue running
 - `LeaseMismatch` from heartbeat or completion is terminal for that lease
-  attempt, not fatal to the worker process: workers log it, drop local lease or
-  completion tracking, and keep polling
+  attempt, not fatal to the worker process: workers log it and keep polling;
+  heartbeat loss stops heartbeating that attempt until the handler joins, and
+  completion loss drops only that attempt's completed result
 - invalid config, invalid stored data, invalid timestamps, job-id contract
   violations, data-contract errors, and worker task join failures remain fatal
 - handlers receive only `job_id`
@@ -283,8 +286,10 @@ Redis runtime error after the handler returns, the worker keeps the completed
 lease active, continues heartbeating it, and retries the same completion result
 after backoff.
 
-If heartbeat or completion returns `LeaseMismatch`, the worker must drop the
-local lease attempt without retrying that handler result. This is not a
+If heartbeat returns `LeaseMismatch`, the worker must stop heartbeating that
+attempt while keeping it counted against local concurrency until its handler
+joins. If completion returns `LeaseMismatch`, the worker must drop that
+completed attempt without retrying the handler result. Neither case is a
 successful acknowledgement, failure, or reschedule; it means the worker lost
 ownership and the authoritative queue state determines whether the job was
 already completed, requeued, failed, rescheduled, or reserved by another worker.

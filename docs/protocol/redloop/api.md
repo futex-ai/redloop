@@ -226,8 +226,10 @@ pub enum FailedSelector { JobId(String), OlderThan(Timestamp), All }
   completion are recoverable runtime errors: the runtime must log, back off,
   and keep the worker process alive.
 - `LeaseMismatch` during heartbeat or completion is terminal for that lease
-  attempt, not fatal to the worker process: the runtime must log it, drop local
-  lease or completion tracking for that attempt, and keep polling.
+  attempt, not fatal to the worker process: the runtime must log it and keep
+  polling. Heartbeat loss stops heartbeating that attempt while it remains
+  counted against local concurrency until the handler joins; completion loss
+  drops only that attempt's completed result.
 - invalid config, invalid stored data, invalid timestamps, job-id contract
   violations, data-contract errors, and worker task join failures remain
   fatal runtime errors returned from `run(...)`.
@@ -277,10 +279,11 @@ ack, reschedule completion, or fail/retry completion succeeds or the runtime
 receives `LeaseMismatch`.
 
 `LeaseMismatch` means the worker no longer owns the lease attempt. The runtime
-must drop the stale local lease or completion attempt and continue; it must not
-pretend the requested acknowledgement, failure, or reschedule succeeded. The
-authoritative queue state wins, so the job may already be completed, failed,
-rescheduled, requeued, or reserved by another worker.
+must stop heartbeating a lost active attempt until its handler joins, or drop a
+lost completed attempt and continue. It must not pretend the requested
+acknowledgement, failure, or reschedule succeeded. The authoritative queue state
+wins, so the job may already be completed, failed, rescheduled, requeued, or
+reserved by another worker.
 
 ## Example
 

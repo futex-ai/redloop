@@ -204,7 +204,7 @@ impl QueueStore for PendingReserveStore {
         _now: Timestamp,
         _lease_duration: Duration,
     ) -> Result<()> {
-        Err(unused_store_error())
+        Ok(())
     }
 
     async fn complete_and_reschedule(
@@ -224,6 +224,6 @@ impl QueueStore for PendingReserveStore {
     }
 
     async fn reap_expired(&self, _namespace: &str, _now: Timestamp, _limit: usize) -> Result<u64> {
-        Err(unused_store_error())
+        Ok(0)
     }
 }

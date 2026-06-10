@@ -16,7 +16,7 @@ use super::completion::resolve_completed;
 use super::handler::{DynJobHandler, RedloopWorkerRuntime, RuntimeHandler, TraitHandlerAdapter};
 use super::heartbeat::heartbeat_active;
 use super::leases::{
-    ActiveLease, CompletedLease, new_lease_tokens, next_poll_delay, sleep_duration,
+    ActiveLease, CompletedLease, LeaseAttemptKey, new_lease_tokens, next_poll_delay, sleep_duration,
 };
 use super::recovery::{
     recoverable_runtime_result, runtime_backoff_deadline, runtime_backoff_ready,
@@ -73,8 +73,8 @@ impl Worker {
         let mut heartbeat_tick = tokio::time::interval(self.config.heartbeat_interval);
         let mut reap_tick = tokio::time::interval(self.config.reap_interval);
         let mut join_set = JoinSet::new();
-        let mut active = HashMap::<String, ActiveLease>::new();
-        let mut pending_completed = HashMap::<String, CompletedLease>::new();
+        let mut active = HashMap::<LeaseAttemptKey, ActiveLease>::new();
+        let mut pending_completed = HashMap::<LeaseAttemptKey, CompletedLease>::new();
         let mut poll_delay = self.config.poll_interval_min;
         let mut next_schedule_at: Option<Timestamp> = None;
         let mut reserve_sleep: Option<(Duration, bool)> = None;
@@ -180,7 +180,7 @@ impl Worker {
     fn drain_joined_jobs(
         &self,
         join_set: &mut JoinSet<CompletedLease>,
-        pending_completed: &mut HashMap<String, CompletedLease>,
+        pending_completed: &mut HashMap<LeaseAttemptKey, CompletedLease>,
     ) -> Result<()> {
         while let Some(result) = join_set.try_join_next() {
             self.record_join_result(result, pending_completed)?;
@@ -191,24 +191,24 @@ impl Worker {
     fn record_join_result(
         &self,
         join_result: std::result::Result<CompletedLease, JoinError>,
-        pending_completed: &mut HashMap<String, CompletedLease>,
+        pending_completed: &mut HashMap<LeaseAttemptKey, CompletedLease>,
     ) -> Result<()> {
         let completed = join_result.map_err(|source| Error::WorkerTaskJoin { source })?;
-        pending_completed.insert(completed.job_id.clone(), completed);
+        pending_completed.insert(completed.attempt_key(), completed);
         Ok(())
     }
 
     async fn resolve_pending_completed(
         &self,
-        active: &mut HashMap<String, ActiveLease>,
-        pending_completed: &mut HashMap<String, CompletedLease>,
+        active: &mut HashMap<LeaseAttemptKey, ActiveLease>,
+        pending_completed: &mut HashMap<LeaseAttemptKey, CompletedLease>,
     ) -> Result<bool> {
-        let mut should_back_off = false;
-        let job_ids = pending_completed.keys().cloned().collect::<Vec<_>>();
-        for job_id in job_ids {
-            let Some(completed) = pending_completed.remove(&job_id) else {
+        let attempt_keys = pending_completed.keys().cloned().collect::<Vec<_>>();
+        for attempt_key in attempt_keys {
+            let Some(completed) = pending_completed.remove(&attempt_key) else {
                 continue;
             };
+            let completed_key = completed.attempt_key();
             match resolve_completed(
                 &self.namespace,
                 self.store.as_ref(),
@@ -219,7 +219,7 @@ impl Worker {
             .await
             {
                 Ok(()) => {
-                    active.remove(&completed.job_id);
+                    active.remove(&completed_key);
                 }
                 Err(Error::LeaseMismatch { job_id }) => {
                     tracing::warn!(
@@ -227,7 +227,7 @@ impl Worker {
                         lease_mismatch_job_id = %job_id,
                         "worker completion lost lease; dropping local lease attempt"
                     );
-                    active.remove(&completed.job_id);
+                    active.remove(&completed_key);
                 }
                 Err(error) if error.is_recoverable_worker_runtime() => {
                     tracing::warn!(
@@ -235,12 +235,12 @@ impl Worker {
                         error = %error,
                         "worker completion resolution hit recoverable Redis error; keeping lease active and retrying"
                     );
-                    pending_completed.insert(completed.job_id.clone(), completed);
-                    should_back_off = true;
+                    pending_completed.insert(completed_key, completed);
+                    return Ok(true);
                 }
                 Err(error) => return Err(error),
             }
         }
-        Ok(should_back_off)
+        Ok(false)
     }
 }

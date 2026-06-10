@@ -7,22 +7,29 @@ use crate::config::WorkerConfig;
 use crate::error::{Error, Result};
 use crate::store::QueueStore;
 
-use super::leases::ActiveLease;
+use super::leases::{ActiveLease, LeaseAttemptKey};
 
 pub(crate) async fn heartbeat_active(
     namespace: &str,
     store: &dyn QueueStore,
     clock: &dyn Clock,
     config: &WorkerConfig,
-    active: &mut HashMap<String, ActiveLease>,
+    active: &mut HashMap<LeaseAttemptKey, ActiveLease>,
 ) -> Result<()> {
     let now = clock.now();
     let leases = active
         .values()
-        .map(|lease| (lease.job_id.clone(), lease.lease_token.clone()))
+        .filter(|lease| lease.heartbeat_enabled())
+        .map(|lease| {
+            (
+                lease.attempt_key(),
+                lease.job_id.clone(),
+                lease.lease_token.clone(),
+            )
+        })
         .collect::<Vec<_>>();
 
-    for (job_id, lease_token) in leases {
+    for (attempt_key, job_id, lease_token) in leases {
         match store
             .heartbeat(
                 namespace,
@@ -41,9 +48,11 @@ pub(crate) async fn heartbeat_active(
                 tracing::warn!(
                     job_id = %job_id,
                     lease_mismatch_job_id = %lease_job_id,
-                    "worker heartbeat lost lease; dropping local lease attempt"
+                    "worker heartbeat lost lease; marking local attempt as lost"
                 );
-                active.remove(&job_id);
+                if let Some(lease) = active.get_mut(&attempt_key) {
+                    lease.disable_heartbeat();
+                }
             }
             Err(error) => return Err(error),
         }

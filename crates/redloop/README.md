@@ -89,9 +89,11 @@ the completion mutation.
 Redloop provides at-least-once delivery. Handlers must be safe to run more than
 once for the same `job_id`, and completion is only applied while the worker still
 owns the matching lease token. If heartbeat or completion receives
-`LeaseMismatch`, the worker treats that lease attempt as terminal, drops local
-tracking for it, logs the lease loss, and keeps polling; the queue's current
-state wins.
+`LeaseMismatch`, the worker treats that lease attempt as terminal and keeps
+polling; the queue's current state wins. Heartbeat lease loss stops further
+heartbeats for that attempt while the running handler still counts against local
+concurrency until it joins, and completion lease loss discards only that
+attempt's completed result.
 
 ### Key Code
 
