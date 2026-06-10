@@ -95,14 +95,6 @@ heartbeats for that attempt while the running handler still counts against local
 concurrency until it joins, and completion lease loss discards only that
 attempt's completed result.
 
-### Key Code
-
-- `src/lib.rs` - public exports for the Redis client, queue traits, and worker runtime.
-- `src/contract.rs` - enqueue, namespace, and client trait boundaries.
-- `src/client.rs` - concrete Redis-backed queue client and namespace implementation.
-- `src/worker.rs` - job-handler and worker-runtime implementation.
-- `src/redis_store/` - Redis key layout, Lua flows, and query paths.
-
 ### Related Docs
 
 - [`../../docs/protocol/redloop/README.md`](../../docs/protocol/redloop/README.md)

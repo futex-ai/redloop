@@ -1,7 +1,8 @@
 //! Crate-wide error types and runtime error classification.
 
-use crate::types::JobState;
 use thiserror::Error;
+
+use crate::types::JobState;
 
 /// Crate-wide result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -101,3 +102,7 @@ impl Error {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "_tests_/error_tests.rs"]
+mod error_tests;
