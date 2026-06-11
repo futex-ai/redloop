@@ -12,7 +12,8 @@
 
 - ASAP and scheduled jobs
 - adaptive polling workers
-- transient reserve timeout backoff without aborting active jobs
+- transient Redis timeout and transport recovery without aborting active jobs
+- at-least-once delivery with lease-loss tolerance
 - lease + heartbeat safety
 - retry and reschedule flows
 - durable rerun requests when a job is enqueued during its own active lease
@@ -65,7 +66,7 @@ The protocol contract for this crate lives in:
 - `docs/protocol/redloop/redis-layout.md`
 - `plans/README.md`
 
-Key code entry points:
+### Key Code
 
 - `src/lib.rs` — public trait exports plus the `RedisRedloopClient` adapter alias
 - `src/contract.rs` — `RedloopClient`, `RedloopNamespace`, enqueue-builder traits, and dyn aliases
@@ -78,18 +79,21 @@ Downstream crates should depend on the exported dyn traits. Binaries and other
 composition roots may still construct `RedisRedloopClient` concretely and then
 erase it to those traits before injection.
 
-Worker reserve calls treat Redis timeouts as transient queue pressure. The
-worker logs the timeout, backs off using the configured polling delay, and
-continues running so already leased jobs can finish, heartbeat, and be
-acknowledged before the next reserve attempt.
+Worker reserve, heartbeat, reap, and completion calls treat Redis command
+timeouts and transient Redis transport failures as recoverable runtime errors.
+The worker logs the error, backs off using the configured polling delay, and
+continues running. If completion acknowledgement fails transiently after a
+handler finishes, the lease remains active and heartbeated while Redloop retries
+the completion mutation.
 
-### Key Code
-
-- `src/lib.rs` - public exports for the Redis client, queue traits, and worker runtime.
-- `src/contract.rs` - enqueue, namespace, and client trait boundaries.
-- `src/client.rs` - concrete Redis-backed queue client and namespace implementation.
-- `src/worker.rs` - job-handler and worker-runtime implementation.
-- `src/redis_store/` - Redis key layout, Lua flows, and query paths.
+Redloop provides at-least-once delivery. Handlers must be safe to run more than
+once for the same `job_id`, and completion is only applied while the worker still
+owns the matching lease token. If heartbeat or completion receives
+`LeaseMismatch`, the worker treats that lease attempt as terminal and keeps
+polling; the queue's current state wins. Heartbeat lease loss stops further
+heartbeats for that attempt while the running handler still counts against local
+concurrency until it joins, and completion lease loss discards only that
+attempt's completed result.
 
 ### Related Docs
 

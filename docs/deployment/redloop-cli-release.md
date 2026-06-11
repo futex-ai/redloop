@@ -44,8 +44,8 @@ Required GitHub secrets:
 - `GCP_WORKLOAD_IDENTITY_PROVIDER` - workload identity provider for GCP deploys.
 - `GCP_SERVICE_ACCOUNT` - deploy service account email.
 
-CI configures Cargo with `scripts/configure-private-cargo-git.sh`. The
-workflows pass `CI_GITHUB_FUTEX_SHARED` to that script as
+Release workflows configure Cargo with `scripts/configure-private-cargo-git.sh`.
+Those workflows pass `CI_GITHUB_FUTEX_SHARED` to that script as
 `CLI_RELEASE_REPO_TOKEN`; the script then sets Git URL rewrites for the private
 dependency and runs `git ls-remote` against `futex-ai/cli-release` before Cargo
 starts, so token access failures surface before the Rust build.

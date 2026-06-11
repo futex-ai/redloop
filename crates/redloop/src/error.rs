@@ -1,5 +1,8 @@
-use crate::types::JobState;
+//! Crate-wide error types and runtime error classification.
+
 use thiserror::Error;
+
+use crate::types::JobState;
 
 /// Crate-wide result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -84,3 +87,22 @@ impl std::fmt::Display for InvalidConfigKind {
         f.write_str(value)
     }
 }
+
+impl Error {
+    /// Returns true when a worker runtime should recover and keep polling.
+    pub fn is_recoverable_worker_runtime(&self) -> bool {
+        match self {
+            Error::CommandTimedOut { .. } => true,
+            Error::Redis { source, .. } => {
+                source.is_timeout()
+                    || source.is_connection_refusal()
+                    || source.is_connection_dropped()
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "_tests_/error_tests.rs"]
+mod error_tests;

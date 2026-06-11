@@ -142,7 +142,13 @@ impl RedisStore {
             });
         }
 
-        let _ = self.remember_namespace(namespace).await;
+        if let Err(error) = self.remember_namespace(namespace).await {
+            tracing::warn!(
+                namespace,
+                ?error,
+                "failed to remember namespace after reserve; returning reserved jobs"
+            );
+        }
         Ok(ReserveBatch {
             jobs,
             next_schedule_at,
