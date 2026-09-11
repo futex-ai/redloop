@@ -14,6 +14,9 @@
 
 The exact Redis key layout and atomic mutation flows are defined in [Redloop Redis Layout](./redis-layout.md).
 
+Response deadlines and recovery after a missing reply follow the
+[Redis command timeout contract](./timeouts.md).
+
 ## At-Least-Once Delivery
 
 Redloop provides at-least-once delivery. A job can run more than once when a
