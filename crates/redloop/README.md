@@ -21,6 +21,12 @@
 - operator-facing query and mutation APIs
 - trait-first runtime seams for enqueue and worker behavior
 
+`ConnectConfig.command_timeout` bounds each Redis command or pipeline. The
+underlying Redis response timeout uses the same duration for standalone,
+Sentinel, and Cluster connections, including automatic reconnects. A timeout
+does not undo a mutation: a lost reservation reply may require lease expiry and
+reaping before another worker can receive the job.
+
 ## Quick Start
 
 ```rust
@@ -58,6 +64,11 @@ cargo test -p redloop
 cargo build -p redloop --example basic
 cargo clippy -p redloop --all-targets --all-features -- -D warnings
 ```
+
+The `command_timeout` integration target uses a reply-delaying TCP proxy and
+isolated local Redis processes. Install `redis-server` (Redis 6.2 or later) on
+`PATH` for its Sentinel and single-node Cluster coverage. Test processes and
+temporary state are removed when each fixture is dropped.
 
 The protocol contract for this crate lives in:
 
@@ -99,5 +110,6 @@ attempt's completed result.
 
 - [`../../docs/protocol/redloop/README.md`](../../docs/protocol/redloop/README.md)
 - [`../../docs/protocol/redloop/api.md`](../../docs/protocol/redloop/api.md)
+- [`../../docs/protocol/redloop/timeouts.md`](../../docs/protocol/redloop/timeouts.md)
 - [`../../docs/protocol/redloop/redis-layout.md`](../../docs/protocol/redloop/redis-layout.md)
 - [`../../plans/README.md`](../../plans/README.md)

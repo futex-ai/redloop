@@ -171,6 +171,8 @@ pub enum FailedSelector { JobId(String), OlderThan(Timestamp), All }
 
 ## Required Method Semantics
 
+- Redis response deadlines and ambiguous timeout outcomes follow
+  [Redis command timeouts](./timeouts.md).
 - `RedisRedloopClient::connect(...)` creates the Redis-backed adapter.
 - `RedloopClient::namespace(...)` returns a namespace handle.
 - `RedloopNamespace::job(job_id)` starts a builder for that job ID.

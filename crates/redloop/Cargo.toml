@@ -11,6 +11,10 @@ repository.workspace = true
 name = "storage_integration"
 path = "tests/storage_integration/mod.rs"
 
+[[test]]
+name = "command_timeout"
+path = "tests/command_timeout/mod.rs"
+
 [dependencies]
 async-trait = "0.1.89"
 chrono = { version = "0.4.44", features = ["serde"] }

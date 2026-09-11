@@ -11,6 +11,7 @@ pub type Timestamp = DateTime<Utc>;
 pub struct ConnectConfig {
     pub deployment: RedisDeployment,
     pub key_prefix: String,
+    /// Per-command/pipeline deadline, also retained by Redis connections on reconnect.
     pub command_timeout: Duration,
 }
 

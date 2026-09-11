@@ -36,6 +36,11 @@ jobs:
           rustup toolchain install "${RUST_TOOLCHAIN}" --component rustfmt --component clippy
           rustup default "${RUST_TOOLCHAIN}"
 
+      - name: Install Redis topology test server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+
       - name: Install actionlint
         run: |
           asset="actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"

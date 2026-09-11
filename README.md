@@ -41,6 +41,10 @@ client
 # }
 ```
 
+The configured command timeout also governs the underlying Redis response
+timeout after automatic reconnection. See the [timeout and recovery
+contract](./docs/protocol/redloop/timeouts.md) for ambiguous mutation outcomes.
+
 Operator CLI examples:
 
 ```bash
