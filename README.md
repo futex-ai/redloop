@@ -73,10 +73,8 @@ fall back to a local `redis-server` path where the copied tests support it.
   runbook.
 - `scripts/cli-release.sh` - shared CLI release asset packaging helper.
 - `xtask` - local verification and review commands.
-- `plans` - active and completed implementation plans.
 
 ## Links
 
-- [Plans](./plans/README.md)
 - [Documentation](./docs/README.md)
 - [Redloop protocol](./docs/protocol/redloop/README.md)
