@@ -75,7 +75,6 @@ The protocol contract for this crate lives in:
 - `docs/protocol/redloop/README.md`
 - `docs/protocol/redloop/api.md`
 - `docs/protocol/redloop/redis-layout.md`
-- `plans/README.md`
 
 ### Key Code
 
@@ -112,4 +111,3 @@ attempt's completed result.
 - [`../../docs/protocol/redloop/api.md`](../../docs/protocol/redloop/api.md)
 - [`../../docs/protocol/redloop/timeouts.md`](../../docs/protocol/redloop/timeouts.md)
 - [`../../docs/protocol/redloop/redis-layout.md`](../../docs/protocol/redloop/redis-layout.md)
-- [`../../plans/README.md`](../../plans/README.md)

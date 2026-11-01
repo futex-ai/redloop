@@ -114,7 +114,6 @@
 - Any time a new TODO is discovered during implementation, it should be added under the relevant milestone (just add the new TODO, and then continue with the active TODO)
 - If a TODO is complex, break it down into sub-tasks/TODOs
 - As you complete items, you should tick them off in the relevant file under `./plans`
-- The workspace `README.md` should link to `plans/README.md`, not to an individual plan file unless a specific change needs to be referenced
 - Mark a milestone as completed when all the tasks are completed, do not re-open existing milestones - create a new milestone if new tasks are needed that do not fit into an existing milestone
 
 ## Rust

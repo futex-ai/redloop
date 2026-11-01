@@ -53,4 +53,3 @@ cargo xtask check
 - [`../../docs/protocol/redloop/README.md`](../../docs/protocol/redloop/README.md)
 - [`../../docs/protocol/redloop/api.md`](../../docs/protocol/redloop/api.md)
 - [`../../docs/deployment/redloop-cli-release.md`](../../docs/deployment/redloop-cli-release.md)
-- [`../../plans/README.md`](../../plans/README.md)
