@@ -56,5 +56,6 @@
   - Await the reserve outside the select. An ack then waits for a pending reserve. This breaks the requirement that `pending_reserve_does_not_delay_active_job_ack` protects.
 - **Wider fix:** C. It is structural, because a select loop can then no longer drop a side-effecting call. The `## Review focus` section of `AGENTS.md` also names this class for reviews.
 - **Previous examples:** None found. The reserve call has been a branch of this select since commit `0103b35`, which extracted the workspace. Commit `8ee21e2` later changed the same loop for transient-error recovery. Commit `16b7d84` added `docs/protocol/redloop/timeouts.md` and its tests, but it did not change this loop.
+- **Related:** `plans/follow-ups/pending-reserve-test-hand-written-store.md`. The regression test of this fix needs the pending-call helper of that item's option B, so one branch can fix both items.
 - **Recommendation:** C. It is the structural wider fix, so no select loop can drop a side-effecting store call. The fix rule of the shared `decisions-and-findings` skill ranks a structural wider fix before the direct fix. C applies the mechanism of A through the new type. It also adds the regression test of A.
 - **Action:** fix after merge, apply C, because the fix changes the worker runtime, which the agent-rules branch that found it does not touch.
