@@ -1,5 +1,14 @@
 # Plan: Redloop Juno Extraction
 
+Status: Active. The work so far is on `main`. These ten TODOs are open:
+
+- Milestone 5: smoke-test `redloop-cli upgrade status` against the
+  deployed Cloud Run release server after the first release.
+- Milestone 6: the eight TODOs in Juno that make Juno consume Redloop as
+  an external dependency.
+- Milestone 7: tag or pin the private git revision that Juno will
+  consume.
+
 Migrate only the Redloop-specific crates and supporting infrastructure from
 `/Users/calummoore/projects/futex/juno` into this repository, then make Juno
 consume Redloop as an external Rust dependency.

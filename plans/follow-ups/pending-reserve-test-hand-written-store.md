@@ -1,0 +1,36 @@
+# Pending reserve test uses a hand-written store
+
+- **Severity:** Low. **Effort:** Medium. **Confidence:** High. **Harder later:** No.
+- **Kind:** Outside the scope.
+- **Added:** 2026-11-04, from the branch `conductor/agents-md-redloop`, in the post-push review.
+- **Location:** `crates/redloop/src/worker/_tests_/run/pending_reserve_tests.rs:75`, `crates/redloop/src/worker/_tests_/run/pending_reserve_tests.rs:82`, `crates/redloop/src/worker/_tests_/run/pending_reserve_tests.rs:107`, `crates/redloop/src/store.rs:52`.
+- **Reason:** The fix changes a worker test, and the branch that found it changes only agent rules and plan docs.
+
+- **Terms:**
+  - **`QueueStore`:** the store trait in `crates/redloop/src/store.rs`, which the worker calls to reserve, heartbeat, reap, and complete jobs.
+  - **`QueueStoreMock`:** the unimock mock of `QueueStore`, which the attribute at `store.rs:52` generates under `cfg(test)`.
+  - **Hand-written fake store:** a test type that implements `QueueStore` by hand instead of through `QueueStoreMock`.
+- **Background:**
+  - The shared `rust` skill from `futex-ai/skills` says that unit tests use `unimock` to mock trait boundaries, also for a trait with one implementation.
+  - The review prompt of the shared `implementation-review` skill counts a test with a hand-written fake store as a weak test.
+  - The other worker tests under `crates/redloop/src/worker/_tests_/run/` use `QueueStoreMock`, for example `runtime_recovery/support.rs` and `reserve_timeout_tests.rs`.
+  - The test `pending_reserve_does_not_delay_active_job_ack` at line 26 checks that a pending reserve does not delay the ack of a finished job. No other test checks this.
+  - The same file defines `PendingReserveStore` at line 75. It implements every method of `QueueStore` by hand from line 82 to the end of the file, line 229.
+  - Its first reserve returns `job-1`. Its second reserve signals a channel, waits 5 s with `tokio::time::sleep` at line 107, and returns an error.
+  - Its heartbeat and reap succeed. Its ack records the call and returns the sentinel error of `unused_store_error()` in `support.rs`, which ends the test. Every other method returns that sentinel error too.
+  - The handler mock waits on that channel with `recv_timeout` at line 51, so the second reserve is pending when the job finishes.
+  - A unimock answer is a plain closure that returns its value at once. It therefore cannot keep an async call pending without blocking its thread.
+- **Problem:** The test mocks the store with a hand-written fake instead of `QueueStoreMock`. This breaks the `rust` skill rule, and the review prompt counts it as a weak test. The fake also adds about 150 lines. About 90 of them are methods that the test never expects the worker to call.
+- **Impact if no action:** The only test of this requirement stays outside the mocking rule. The next test that needs a pending store call has no shared way to get one, so it can copy the fake.
+- **Root question:** How does a worker test keep a store call pending while it mocks the store with the library that the `rust` skill requires?
+- **Options:**
+  - **A.** Keep the fake, and add a doc comment that says why. The comment says that a unimock answer returns at once, so it cannot keep an async call pending. Effort: Small.
+  - **B.** Wider fix: add one shared test helper that wraps a `QueueStoreMock` and holds chosen calls pending until the test releases them. This test and the regression test of `plans/follow-ups/worker-drops-in-flight-reserve.md` both use it. Effort: Medium.
+- **Left out:**
+  - Delete the test. No other test checks that a pending reserve does not delay an ack, so the deletion loses that coverage.
+  - Replace the fake with a `QueueStoreMock` whose second reserve answer blocks its thread on a channel. The worker polls the reserve inside its select, in the same task as the join branch and the test timeout. A blocked answer stops all three, so the ack cannot happen while the reserve is pending. This fails the goal.
+- **Wider fix:** B. With one shared helper, no test needs a hand-written fake store to keep a call pending.
+- **Previous examples:** None found. `PendingReserveStore` is the only hand-written `impl QueueStore` outside `crates/redloop/src/redis_store/`.
+- **Related:** `plans/follow-ups/worker-drops-in-flight-reserve.md`. Its regression test needs a store call that stays pending, which the helper of option B gives. One branch can fix both items.
+- **Recommendation:** B. It is the structural wider fix, and the worker fix needs the same helper for its regression test.
+- **Action:** fix after merge, apply B, because the fix changes worker tests, which the agent-rules branch that found it does not touch.
